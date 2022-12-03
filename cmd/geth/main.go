@@ -33,12 +33,14 @@ import (
 	"github.com/ethereum/go-ethereum/eth"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/ethclient"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/internal/ethapi"
 	"github.com/ethereum/go-ethereum/internal/flags"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/metrics"
 	"github.com/ethereum/go-ethereum/node"
+	"github.com/ethereum/go-ethereum/params"
 
 	// Force-load the tracer engines to trigger registration
 	_ "github.com/ethereum/go-ethereum/eth/tracers/js"
@@ -242,10 +244,22 @@ func init() {
 	app.Flags = append(app.Flags, rpcFlags...)
 	app.Flags = append(app.Flags, consoleFlags...)
 	app.Flags = append(app.Flags, debug.Flags...)
+	app.Flags = append(app.Flags, debug.FirehoseFlags...)
 	app.Flags = append(app.Flags, metricsFlags...)
 
 	app.Before = func(ctx *cli.Context) error {
-		return debug.Setup(ctx)
+		// Force sync mode to `full` for Firehose code (whatever the value flag!)
+		if err := ctx.Set(utils.SyncModeFlag.Name, "full"); err != nil {
+			log.Error("firehose failed to set sync mode to full", err)
+		}
+
+		firehose.MaybeSyncContext().InitVersion(
+			params.VersionWithCommit(gitCommit, gitDate),
+			params.FirehoseVersion(),
+			params.Variant,
+		)
+
+		return debug.Setup(ctx, utils.MakeGenesis(ctx))
 	}
 	app.After = func(ctx *cli.Context) error {
 		debug.Exit()

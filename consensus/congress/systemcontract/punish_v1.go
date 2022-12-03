@@ -1,15 +1,17 @@
 package systemcontract
 
 import (
+	"math"
+	"math/big"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/consensus/congress/vmcaller"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
-	"math"
-	"math/big"
 )
 
 const (
@@ -27,7 +29,7 @@ func (s *hardForkPunishV1) Update(config *params.ChainConfig, height *big.Int, s
 	contractCode := common.FromHex(punishV1Code)
 
 	//write code to sys contract
-	state.SetCode(PunishV1ContractAddr, contractCode)
+	state.SetCode(PunishV1ContractAddr, contractCode, firehose.NoOpContext)
 	log.Debug("Write code to system contract account", "addr", PunishV1ContractAddr.String(), "code", punishV1Code)
 
 	return

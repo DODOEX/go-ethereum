@@ -22,6 +22,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/state"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 )
@@ -47,12 +48,20 @@ type dummyStatedb struct {
 }
 
 func (*dummyStatedb) GetRefund() uint64 { return 1337 }
+func (d *dummyStatedb) SubBalance(common.Address, *big.Int, *firehose.Context, firehose.BalanceChangeReason) {
+}
+func (d *dummyStatedb) AddBalance(common.Address, *big.Int, bool, *firehose.Context, firehose.BalanceChangeReason) {
+}
+func (d *dummyStatedb) SetBalance(*big.Int)                                {}
+func (d *dummyStatedb) SetNonce(common.Address, uint64, *firehose.Context) {}
+func (d *dummyStatedb) Balance() *big.Int                                  { return new(big.Int) }
+func (d *dummyStatedb) Suicide(common.Address, *firehose.Context) bool     { return false }
 
 func TestStoreCapture(t *testing.T) {
 	var (
-		env      = NewEVM(BlockContext{}, TxContext{}, &dummyStatedb{}, params.TestChainConfig, Config{})
+		env      = NewEVM(BlockContext{}, TxContext{}, &dummyStatedb{}, params.TestChainConfig, Config{}, firehose.NoOpContext)
 		logger   = NewStructLogger(nil)
-		contract = NewContract(&dummyContractRef{}, &dummyContractRef{}, new(big.Int), 0)
+		contract = NewContract(&dummyContractRef{}, &dummyContractRef{}, new(big.Int), 0, firehose.NoOpContext)
 		scope    = &ScopeContext{
 			Memory:   NewMemory(),
 			Stack:    newstack(),

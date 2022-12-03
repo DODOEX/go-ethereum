@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -33,7 +34,7 @@ func (s *hardForkValidatorsV1) Update(config *params.ChainConfig, height *big.In
 	contractCode := common.FromHex(validatorV1Code)
 
 	//write code to sys contract
-	state.SetCode(ValidatorsV1ContractAddr, contractCode)
+	state.SetCode(ValidatorsV1ContractAddr, contractCode, firehose.NoOpContext)
 	log.Debug("Write code to system contract account", "addr", ValidatorsV1ContractAddr.String(), "code", validatorV1Code)
 
 	return

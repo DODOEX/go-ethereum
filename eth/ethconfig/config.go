@@ -34,6 +34,7 @@ import (
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/gasprice"
 	"github.com/ethereum/go-ethereum/ethdb"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/miner"
 	"github.com/ethereum/go-ethereum/node"
@@ -232,7 +233,7 @@ func CreateConsensusEngine(stack *node.Node, chainConfig *params.ChainConfig, co
 	}
 	// If proof-of-stake-authority is requested, set it up
 	if chainConfig.Congress != nil {
-		return congress.New(chainConfig, db)
+		return congress.New(chainConfig, db, firehose.NoOpContext)
 	}
 	// Otherwise assume proof-of-work
 	switch config.PowMode {

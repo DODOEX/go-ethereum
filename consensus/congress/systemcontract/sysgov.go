@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 )
@@ -33,7 +34,7 @@ func (s *hardForkSysGov) Update(config *params.ChainConfig, height *big.Int, sta
 	contractCode := common.FromHex(govCode)
 
 	//write govCode to sys contract
-	state.SetCode(SysGovContractAddr, contractCode)
+	state.SetCode(SysGovContractAddr, contractCode, firehose.NoOpContext)
 	log.Debug("Write code to system contract account", "addr", SysGovContractAddr.String(), "code", govCode)
 
 	return

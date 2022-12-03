@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"sort"
 
+	"github.com/ethereum/go-ethereum/cmd/utils"
 	"github.com/ethereum/go-ethereum/internal/debug"
 	"github.com/ethereum/go-ethereum/p2p/enode"
 	"github.com/ethereum/go-ethereum/params"
@@ -45,7 +46,7 @@ func init() {
 	// Set up the CLI app.
 	app.Flags = append(app.Flags, debug.Flags...)
 	app.Before = func(ctx *cli.Context) error {
-		return debug.Setup(ctx)
+		return debug.Setup(ctx, utils.MakeGenesis(ctx))
 	}
 	app.After = func(ctx *cli.Context) error {
 		debug.Exit()

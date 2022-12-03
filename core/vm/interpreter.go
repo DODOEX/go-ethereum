@@ -22,6 +22,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/math"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -217,7 +218,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		}
 		// Static portion of gas
 		cost = operation.constantGas // For tracing
-		if !contract.UseGas(operation.constantGas) {
+		if !contract.UseGas(operation.constantGas, firehose.IgnoredGasChangeReason) {
 			return nil, ErrOutOfGas
 		}
 
@@ -244,7 +245,7 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 			var dynamicCost uint64
 			dynamicCost, err = operation.dynamicGas(in.evm, contract, stack, mem, memorySize)
 			cost += dynamicCost // total cost, for debug tracing
-			if err != nil || !contract.UseGas(dynamicCost) {
+			if err != nil || !contract.UseGas(dynamicCost, firehose.IgnoredGasChangeReason) {
 				return nil, ErrOutOfGas
 			}
 		}
@@ -255,6 +256,22 @@ func (in *EVMInterpreter) Run(contract *Contract, input []byte, readOnly bool) (
 		if in.cfg.Debug {
 			in.cfg.Tracer.CaptureState(pc, op, gasCopy, cost, callContext, in.returnData, in.evm.depth, err)
 			logged = true
+		}
+
+		if in.evm.firehoseContext.Enabled() {
+			if cost != 0 {
+				gasChangeReason := OpCodeToGasChangeReason(op)
+				if gasChangeReason != firehose.IgnoredGasChangeReason {
+					// When execution reach this point, `contract.UseGas` has been called once
+					// (for only a static) or twice (for both static + dynamic cost). Since it
+					// has been called, it's mean the `c.Gas` has already been adjusted down
+					// to remaining after cost.
+					//
+					// Hence to retrieve the `gasOld` value, we need to come back at state when
+					// gas was not consumed, which means doing `contract.Gas + cost`.
+					in.evm.firehoseContext.RecordGasConsume(contract.Gas+cost, cost, gasChangeReason)
+				}
+			}
 		}
 
 		// execute the operation

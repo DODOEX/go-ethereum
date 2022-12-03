@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"errors"
 	"fmt"
+	"math"
+	"math/big"
+
 	"github.com/ethereum/go-ethereum/accounts"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -15,8 +18,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
-	"math"
-	"math/big"
 )
 
 // Proposal is the system governance proposal info.
@@ -135,7 +136,7 @@ func (c *Congress) executeProposal(chain consensus.ChainHeaderReader, header *ty
 		return nil, nil, err
 	}
 	//add nonce for validator
-	state.SetNonce(c.validator, nonce+1)
+	state.SetNonce(c.validator, nonce+1, c.firehoseContext)
 	receipt := c.executeProposalMsg(chain, header, state, prop, totalTxIndex, tx.Hash(), common.Hash{})
 
 	return tx, receipt, nil
@@ -159,7 +160,7 @@ func (c *Congress) replayProposal(chain consensus.ChainHeaderReader, header *typ
 	//make system governance transaction
 	nonce := state.GetNonce(sender)
 	//add nonce for validator
-	state.SetNonce(sender, nonce+1)
+	state.SetNonce(sender, nonce+1, c.firehoseContext)
 	receipt := c.executeProposalMsg(chain, header, state, prop, totalTxIndex, tx.Hash(), header.Hash())
 
 	return receipt, nil
@@ -220,7 +221,7 @@ func (c *Congress) ApplySysTx(evm *vm.EVM, state *state.StateDB, txIndex int, se
 	evm.Context.ExtraValidator = nil
 	nonce := evm.StateDB.GetNonce(sender)
 	//add nonce for validator
-	evm.StateDB.SetNonce(sender, nonce+1)
+	evm.StateDB.SetNonce(sender, nonce+1, c.firehoseContext)
 
 	action := prop.Action.Uint64()
 	switch action {

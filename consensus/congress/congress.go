@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/metrics"
 
 	"github.com/ethereum/go-ethereum/accounts"
@@ -226,11 +227,13 @@ type Congress struct {
 
 	// The fields below are for testing only
 	fakeDiff bool // Skip difficulty verifications
+
+	firehoseContext *firehose.Context
 }
 
 // New creates a Congress proof-of-stake-authority consensus engine with the initial
 // validators set to the ones provided by the user.
-func New(chainConfig *params.ChainConfig, db ethdb.Database) *Congress {
+func New(chainConfig *params.ChainConfig, db ethdb.Database, firehoseContext *firehose.Context) *Congress {
 	// Set any missing consensus parameters to their defaults
 	conf := *chainConfig.Congress
 	if conf.Epoch == 0 {
@@ -255,6 +258,7 @@ func New(chainConfig *params.ChainConfig, db ethdb.Database) *Congress {
 		proposals:       make(map[common.Address]bool),
 		abi:             abi,
 		signer:          types.LatestSignerForChainID(chainConfig.ChainID),
+		firehoseContext: firehoseContext,
 	}
 }
 
@@ -604,7 +608,7 @@ func (c *Congress) Prepare(chain consensus.ChainHeaderReader, header *types.Head
 
 // Finalize implements consensus.Engine, ensuring no uncles are set, nor block
 // rewards given.
-func (c *Congress) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs *[]*types.Transaction, uncles []*types.Header, receipts *[]*types.Receipt, systemTxs []*types.Transaction) error {
+func (c *Congress) Finalize(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs *[]*types.Transaction, uncles []*types.Header, receipts *[]*types.Receipt, systemTxs []*types.Transaction, firehoseContext *firehose.Context) error {
 	// Initialize all system contracts at block 1.
 	if header.Number.Cmp(common.Big1) == 0 {
 		if err := c.initializeSystemContracts(chain, header, state); err != nil {
@@ -631,7 +635,7 @@ func (c *Congress) Finalize(chain consensus.ChainHeaderReader, header *types.Hea
 
 	// execute block reward tx.
 	if len(*txs) > 0 {
-		if err := c.trySendBlockReward(chain, header, state); err != nil {
+		if err := c.trySendBlockReward(chain, header, state, firehoseContext); err != nil {
 			return err
 		}
 	}
@@ -701,7 +705,7 @@ func (c *Congress) Finalize(chain consensus.ChainHeaderReader, header *types.Hea
 
 // FinalizeAndAssemble implements consensus.Engine, ensuring no uncles are set,
 // nor block rewards given, and returns the final block.
-func (c *Congress) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt) (b *types.Block, rs []*types.Receipt, err error) {
+func (c *Congress) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, txs []*types.Transaction, uncles []*types.Header, receipts []*types.Receipt, firehoseContext *firehose.Context) (b *types.Block, rs []*types.Receipt, err error) {
 	defer func() {
 		if err != nil {
 			log.Warn("FinalizeAndAssemble failed", "err", err)
@@ -723,7 +727,7 @@ func (c *Congress) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header
 
 	// deposit block reward if any tx exists.
 	if len(txs) > 0 {
-		if err := c.trySendBlockReward(chain, header, state); err != nil {
+		if err := c.trySendBlockReward(chain, header, state, firehoseContext); err != nil {
 			panic(err)
 		}
 	}
@@ -783,16 +787,16 @@ func (c *Congress) FinalizeAndAssemble(chain consensus.ChainHeaderReader, header
 	return types.NewBlock(header, txs, nil, receipts, new(trie.Trie)), receipts, nil
 }
 
-func (c *Congress) trySendBlockReward(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB) error {
+func (c *Congress) trySendBlockReward(chain consensus.ChainHeaderReader, header *types.Header, state *state.StateDB, firehoseContext *firehose.Context) error {
 	fee := state.GetBalance(consensus.FeeRecoder)
 	if fee.Cmp(common.Big0) <= 0 {
 		return nil
 	}
 
 	// Miner will send tx to deposit block fees to contract, add to his balance first.
-	state.AddBalance(header.Coinbase, fee)
+	state.AddBalance(header.Coinbase, fee, false, firehoseContext, firehose.BalanceChangeReason("reward_mine_send_block"))
 	// reset fee
-	state.SetBalance(consensus.FeeRecoder, common.Big0)
+	state.SetBalance(consensus.FeeRecoder, common.Big0, firehose.NoOpContext, firehose.IgnoredBalanceChangeReason)
 
 	method := "distributeBlockReward"
 	data, err := c.abi[systemcontract.ValidatorsContractName].Pack(method)

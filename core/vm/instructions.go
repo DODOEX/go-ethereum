@@ -20,6 +20,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 	"golang.org/x/crypto/sha3"
@@ -244,6 +245,10 @@ func opSha3(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 	evm := interpreter.evm
 	if evm.Config.EnablePreimageRecording {
 		evm.StateDB.AddPreimage(interpreter.hasherBuf, data)
+	}
+
+	if interpreter.evm.firehoseContext.Enabled() {
+		interpreter.evm.firehoseContext.RecordKeccak(interpreter.hasherBuf, data)
 	}
 
 	size.SetBytes(interpreter.hasherBuf[:])
@@ -515,7 +520,7 @@ func opSstore(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]b
 	loc := scope.Stack.pop()
 	val := scope.Stack.pop()
 	interpreter.evm.StateDB.SetState(scope.Contract.Address(),
-		loc.Bytes32(), val.Bytes32())
+		loc.Bytes32(), val.Bytes32(), interpreter.evm.firehoseContext)
 	return nil, nil
 }
 
@@ -573,7 +578,7 @@ func opCreate(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]b
 	// reuse size int for stackvalue
 	stackvalue := size
 
-	scope.Contract.UseGas(gas)
+	scope.Contract.UseGas(gas, firehose.GasChangeReason("contract_creation"))
 	//TODO: use uint256.Int instead of converting with toBig()
 	var bigVal = big0
 	if !value.IsZero() {
@@ -593,6 +598,11 @@ func opCreate(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]b
 		stackvalue.SetBytes(addr.Bytes())
 	}
 	scope.Stack.push(&stackvalue)
+
+	if interpreter.evm.firehoseContext.Enabled() {
+		interpreter.evm.firehoseContext.RecordGasRefund(scope.Contract.Gas, returnGas)
+	}
+
 	scope.Contract.Gas += returnGas
 
 	if suberr == ErrExecutionReverted {
@@ -612,7 +622,7 @@ func opCreate2(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 
 	// Apply EIP150
 	gas -= gas / 64
-	scope.Contract.UseGas(gas)
+	scope.Contract.UseGas(gas, firehose.GasChangeReason("contract_creation2"))
 	// reuse size int for stackvalue
 	stackvalue := size
 	//TODO: use uint256.Int instead of converting with toBig()
@@ -629,6 +639,11 @@ func opCreate2(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]
 		stackvalue.SetBytes(addr.Bytes())
 	}
 	scope.Stack.push(&stackvalue)
+
+	if interpreter.evm.firehoseContext.Enabled() {
+		interpreter.evm.firehoseContext.RecordGasRefund(scope.Contract.Gas, returnGas)
+	}
+
 	scope.Contract.Gas += returnGas
 
 	if suberr == ErrExecutionReverted {
@@ -670,6 +685,9 @@ func opCall(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 		ret = common.CopyBytes(ret)
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
 	}
+	if interpreter.evm.firehoseContext.Enabled() {
+		interpreter.evm.firehoseContext.RecordGasRefund(scope.Contract.Gas, returnGas)
+	}
 	scope.Contract.Gas += returnGas
 
 	return ret, nil
@@ -705,6 +723,9 @@ func opCallCode(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([
 		ret = common.CopyBytes(ret)
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
 	}
+	if interpreter.evm.firehoseContext.Enabled() {
+		interpreter.evm.firehoseContext.RecordGasRefund(scope.Contract.Gas, returnGas)
+	}
 	scope.Contract.Gas += returnGas
 
 	return ret, nil
@@ -733,6 +754,11 @@ func opDelegateCall(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext
 		ret = common.CopyBytes(ret)
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
 	}
+
+	if interpreter.evm.firehoseContext.Enabled() {
+		interpreter.evm.firehoseContext.RecordGasRefund(scope.Contract.Gas, returnGas)
+	}
+
 	scope.Contract.Gas += returnGas
 
 	return ret, nil
@@ -761,6 +787,11 @@ func opStaticCall(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) 
 		ret = common.CopyBytes(ret)
 		scope.Memory.Set(retOffset.Uint64(), retSize.Uint64(), ret)
 	}
+
+	if interpreter.evm.firehoseContext.Enabled() {
+		interpreter.evm.firehoseContext.RecordGasRefund(scope.Contract.Gas, returnGas)
+	}
+
 	scope.Contract.Gas += returnGas
 
 	return ret, nil
@@ -787,8 +818,8 @@ func opStop(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byt
 func opSuicide(pc *uint64, interpreter *EVMInterpreter, scope *ScopeContext) ([]byte, error) {
 	beneficiary := scope.Stack.pop()
 	balance := interpreter.evm.StateDB.GetBalance(scope.Contract.Address())
-	interpreter.evm.StateDB.AddBalance(beneficiary.Bytes20(), balance)
-	interpreter.evm.StateDB.Suicide(scope.Contract.Address())
+	interpreter.evm.StateDB.AddBalance(beneficiary.Bytes20(), balance, false, interpreter.evm.firehoseContext, firehose.BalanceChangeReason("suicide_refund"))
+	interpreter.evm.StateDB.Suicide(scope.Contract.Address(), interpreter.evm.firehoseContext)
 	if interpreter.cfg.Debug {
 		interpreter.cfg.Tracer.CaptureEnter(SELFDESTRUCT, scope.Contract.Address(), beneficiary.Bytes20(), []byte{}, 0, balance)
 		interpreter.cfg.Tracer.CaptureExit([]byte{}, 0, nil)
@@ -823,7 +854,7 @@ func makeLog(size int) executionFunc {
 				return nil, types.ErrAddressDenied
 			}
 		}
-		interpreter.evm.StateDB.AddLog(evLog)
+		interpreter.evm.StateDB.AddLog(evLog, interpreter.evm.firehoseContext)
 
 		return nil, nil
 	}

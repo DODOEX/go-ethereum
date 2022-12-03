@@ -26,6 +26,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/eth/downloader"
 	"github.com/ethereum/go-ethereum/eth/protocols/eth"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/log"
 )
 
@@ -208,6 +209,18 @@ func (cs *chainSyncer) startSync(op *chainSyncOp) {
 
 // doSync synchronizes the local blockchain with a remote peer.
 func (h *handler) doSync(op *chainSyncOp) error {
+	if firehose.Enabled {
+		// If Firehose is enabled, we force the mode to be a FullSync mode to ensure we correctly
+		// process all transactions. It should probably be adapter so that speculative execution
+		// node could use fast sync which is not the case here.
+		if op.mode != downloader.FullSync {
+			log.Warn("Firehose changed syncing mode to 'full', it is required for proper extraction of the data when enabling Firehose instrumentation through --firehose-enabled", "old", op.mode, "new", downloader.FullSync)
+		}
+
+		op.mode = downloader.FullSync
+		atomic.StoreUint32(&h.snapSync, 0)
+	}
+
 	if op.mode == downloader.FastSync || op.mode == downloader.SnapSync {
 		// Before launch the fast sync, we have to ensure user uses the same
 		// txlookup limit.

@@ -27,6 +27,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ethereum/go-ethereum/firehose"
 	"github.com/ethereum/go-ethereum/params"
 )
 
@@ -50,21 +51,22 @@ The state transitioning model does all the necessary work to work out a valid ne
 6) Derive new state root
 */
 type StateTransition struct {
-	gp          *GasPool
-	msg         Message
-	gas         uint64
-	gasPrice    *big.Int
-	gasFeeCap   *big.Int
-	gasTipCap   *big.Int
-	initialGas  uint64
-	value       *big.Int
-	data        []byte
-	state       vm.StateDB
-	evm         *vm.EVM
-	isMeta      bool
-	feeAddress  common.Address
-	feePercent  uint64 //meta transaction fee percent
-	realPayload []byte //the real transaction fee percent
+	gp              *GasPool
+	msg             Message
+	gas             uint64
+	gasPrice        *big.Int
+	gasFeeCap       *big.Int
+	gasTipCap       *big.Int
+	initialGas      uint64
+	value           *big.Int
+	data            []byte
+	state           vm.StateDB
+	evm             *vm.EVM
+	isMeta          bool
+	feeAddress      common.Address
+	feePercent      uint64 //meta transaction fee percent
+	realPayload     []byte //the real transaction fee percent
+	firehoseContext *firehose.Context
 }
 
 // Message represents a message sent to a contract.
@@ -172,6 +174,8 @@ func NewStateTransition(evm *vm.EVM, msg Message, gp *GasPool) *StateTransition 
 		value:     msg.Value(),
 		data:      msg.Data(),
 		state:     evm.StateDB,
+
+		firehoseContext: evm.FirehoseContext(),
 	}
 }
 
@@ -212,7 +216,7 @@ func (st *StateTransition) buyGas() error {
 	st.gas += st.msg.Gas()
 
 	st.initialGas = st.msg.Gas()
-	st.state.SubBalance(st.msg.From(), mgval)
+	st.state.SubBalance(st.msg.From(), mgval, st.firehoseContext, firehose.BalanceChangeReason("gas_buy"))
 	return nil
 }
 
@@ -231,8 +235,8 @@ func (st *StateTransition) buyGasMeta() error {
 	st.gas += st.msg.Gas()
 
 	st.initialGas = st.msg.Gas()
-	st.state.SubBalance(st.feeAddress, mgFeeAddrVal)
-	st.state.SubBalance(st.msg.From(), mgSelfVal)
+	st.state.SubBalance(st.feeAddress, mgFeeAddrVal, st.firehoseContext, firehose.BalanceChangeReason("gas_meta_buy"))
+	st.state.SubBalance(st.msg.From(), mgSelfVal, st.firehoseContext, firehose.BalanceChangeReason("gas_meta_buy"))
 	return nil
 }
 
@@ -359,6 +363,11 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	if st.gas < gas {
 		return nil, fmt.Errorf("%w: have %d, want %d", ErrIntrinsicGas, st.gas, gas)
 	}
+
+	if st.firehoseContext.Enabled() {
+		st.firehoseContext.RecordGasConsume(st.gas, gas, firehose.GasChangeReason("intrinsic_gas"))
+	}
+
 	st.gas -= gas
 
 	// Check clause 6
@@ -385,7 +394,7 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 		ret, _, st.gas, vmerr = st.evm.Create(sender, st.data, st.gas, st.value)
 	} else {
 		// Increment the nonce for the next transaction
-		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1)
+		st.state.SetNonce(msg.From(), st.state.GetNonce(sender.Address())+1, st.firehoseContext)
 		ret, st.gas, vmerr = st.evm.Call(sender, st.to(), st.data, st.gas, st.value)
 	}
 
@@ -402,9 +411,9 @@ func (st *StateTransition) TransitionDb() (*ExecutionResult, error) {
 	}
 	tip := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), effectiveTip)
 	if st.evm.ChainConfig().Congress != nil {
-		st.state.AddBalance(consensus.FeeRecoder, tip)
+		st.state.AddBalance(consensus.FeeRecoder, tip, false, st.firehoseContext, firehose.BalanceChangeReason("reward_transaction_fee_recoder"))
 	} else {
-		st.state.AddBalance(st.evm.Context.Coinbase, tip)
+		st.state.AddBalance(st.evm.Context.Coinbase, tip, false, st.firehoseContext, firehose.BalanceChangeReason("reward_transaction_fee"))
 	}
 
 	return &ExecutionResult{
@@ -428,11 +437,11 @@ func (st *StateTransition) refundGas(refundQuotient uint64) {
 	if st.isMeta {
 		mgFeeAddrVal := new(big.Int).Div(new(big.Int).Mul(remaining, new(big.Int).SetUint64(st.feePercent)), types.BIG10000)
 		mgSelfVal := new(big.Int).Div(new(big.Int).Mul(remaining, new(big.Int).SetUint64(types.BIG10000.Uint64()-st.feePercent)), types.BIG10000)
-		st.state.AddBalance(st.feeAddress, mgFeeAddrVal)
-		st.state.AddBalance(st.msg.From(), mgSelfVal)
+		st.state.AddBalance(st.feeAddress, mgFeeAddrVal, false, st.firehoseContext, firehose.BalanceChangeReason("gas_refund"))
+		st.state.AddBalance(st.msg.From(), mgSelfVal, false, st.firehoseContext, firehose.BalanceChangeReason("gas_refund"))
 		st.data = st.realPayload
 	} else {
-		st.state.AddBalance(st.msg.From(), remaining)
+		st.state.AddBalance(st.msg.From(), remaining, false, st.firehoseContext, firehose.BalanceChangeReason("gas_refund"))
 	}
 
 	// Also return remaining gas to the block gas counter so it is
